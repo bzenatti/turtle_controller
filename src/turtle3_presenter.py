@@ -44,7 +44,7 @@ def in_room(pose, room_data):
 def navigate_to_room(room_name, navigator):
     """
     Commands the robot to drive to the specified room.
-    During the trip it continuously checks the current pose; if the robot’s (x,y)
+    During the trip it continuously checks the current pose; if the robot's (x,y)
     enters any room's bounding box (other than the target) and it has not already been
     announced, it logs that it is "Passing by" that room.
     
@@ -55,6 +55,7 @@ def navigate_to_room(room_name, navigator):
         return False
 
     target_room = ROOMS[room_name]
+
     # Create the final goal pose from the room's main_pose.
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = "map"
@@ -95,7 +96,7 @@ def navigate_to_room(room_name, navigator):
         if navigator.current_pose is None:
             continue
 
-        # Check each room (except the target) to see if the robot is inside its bounding box.
+        # Check each room to see if the robot is inside its bounding box.
         for rname, rdata in ROOMS.items():
             if rname == room_name:
                 continue
@@ -105,7 +106,7 @@ def navigate_to_room(room_name, navigator):
 
     result = navigator.getResult()
     if result == TaskResult.SUCCEEDED:
-        print(f"Arrived at {room_name}!")
+        print(f"This is the {room_name}!")
         visited_rooms.add(room_name)
         return True
     else:
@@ -115,7 +116,7 @@ def navigate_to_room(room_name, navigator):
 
 def compute_path_length(path):
     """
-    Computes the total Euclidean distance along a nav_msgs/Path.
+    Computes the total Euclidean distance along a path.
     """
     length = 0.0
     poses = path.poses
@@ -127,8 +128,8 @@ def compute_path_length(path):
 
 def calculate_best_room(navigator):
     """
-    Calculates the best (i.e., the room with the shortest computed path)
-    to visit next from the current position, using the nav2 API to compute paths.
+    Calculates the best to visit next from the current position, 
+    using the nav2 API to compute paths.
     """
     # Wait until the current pose is available.
     while navigator.current_pose is None:
@@ -159,7 +160,7 @@ def calculate_best_room(navigator):
         goal_pose.pose.orientation.z = room_data["main_pose"]["orientation"]["z"]
         goal_pose.pose.orientation.w = room_data["main_pose"]["orientation"]["w"]
 
-        # Retrieve the planned path using the nav2 API.
+        # Retrieve the planned path using nav2.
         path = navigator.getPath(current_pose_stamped, goal_pose)
         if path is None:
             print(f"No valid path found to room {room_name}. Skipping this room.")
