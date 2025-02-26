@@ -3,7 +3,8 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
-from tf2_ros import TransformListener, Buffer
+
+visited_rooms = set()
 
 def main(args=None):
     rclpy.init(args=args)
@@ -15,6 +16,10 @@ def main(args=None):
 
     # Begin interactive tour.
     interactive_tour(navigator)
+
+
+    print("This is it, hope you enjoyed!")
+    # navigate_to_room(start_room, navigator)
 
     navigator.destroy_node()
     rclpy.shutdown()
@@ -76,10 +81,10 @@ def navigate_to_room(room_name, navigator):
         waypoint.pose.orientation.w = 1.0
 
         poses = [waypoint, goal_pose]
-        navigator.get_logger().info(f"Navigating to {room_name} using an intermediate waypoint via goThroughPoses...")
+        print(f"Navigating to {room_name}")
         navigator.goThroughPoses(poses)
     else:
-        navigator.get_logger().info(f"Navigating to {room_name} using goToPose...")
+        print(f"Navigating to {room_name}")
         navigator.goToPose(goal_pose)
 
     announced_rooms = set()
@@ -88,7 +93,6 @@ def navigate_to_room(room_name, navigator):
         rclpy.spin_once(navigator, timeout_sec=0.1)
 
         if navigator.current_pose is None:
-            navigator.get_logger().warn("Current pose is not yet available, skipping room check.")
             continue
 
         # Check each room (except the target) to see if the robot is inside its bounding box.
@@ -96,37 +100,107 @@ def navigate_to_room(room_name, navigator):
             if rname == room_name:
                 continue
             if rname not in announced_rooms and in_room(navigator.current_pose, rdata):
-                navigator.get_logger().info(f"Passing by {rname}...")
+                print(f"Passing by {rname}...")
                 announced_rooms.add(rname)
 
     result = navigator.getResult()
     if result == TaskResult.SUCCEEDED:
-        navigator.get_logger().info(f"Arrived at {room_name}!")
+        print(f"Arrived at {room_name}!")
+        visited_rooms.add(room_name)
         return True
     else:
         navigator.get_logger().error(f"Navigation to {room_name} failed with result: {result}")
         return False
 
 
-def full_tour(navigator, visited_rooms):
+def compute_path_length(path):
     """
-    Computes a full tour covering all non-visited rooms.
-    First, it asks the user if the full tour should be completed automatically.
-    If yes, the ordering of the remaining rooms is computed.
-    Otherwise, the user is allowed to select specific rooms.
+    Computes the total Euclidean distance along a nav_msgs/Path.
     """
-    
+    length = 0.0
+    poses = path.poses
+    for i in range(len(poses) - 1):
+        dx = poses[i+1].pose.position.x - poses[i].pose.position.x
+        dy = poses[i+1].pose.position.y - poses[i].pose.position.y
+        length += (dx*dx + dy*dy) ** 0.5
+    return length
+
+def calculate_best_room(navigator):
+    """
+    Calculates the best (i.e., the room with the shortest computed path)
+    to visit next from the current position, using the nav2 API to compute paths.
+    """
+    # Wait until the current pose is available.
+    while navigator.current_pose is None:
+        rclpy.spin_once(navigator, timeout_sec=0.1)
+
+    # Wrap the current_pose (which is a Pose) into a PoseStamped.
+    current_pose_stamped = PoseStamped()
+    current_pose_stamped.header.frame_id = "map"
+    current_pose_stamped.header.stamp = navigator.get_clock().now().to_msg()
+    current_pose_stamped.pose = navigator.current_pose
+
+    best_room = None
+    best_path_length = float('inf')
+
+    for room_name, room_data in ROOMS.items():
+        if room_name in visited_rooms:
+            continue
+
+        # Build the goal pose from the room's main_pose.
+        goal_pose = PoseStamped()
+        goal_pose.header.frame_id = "map"
+        goal_pose.header.stamp = navigator.get_clock().now().to_msg()
+        goal_pose.pose.position.x = room_data["main_pose"]["position"]["x"]
+        goal_pose.pose.position.y = room_data["main_pose"]["position"]["y"]
+        goal_pose.pose.position.z = room_data["main_pose"]["position"]["z"]
+        goal_pose.pose.orientation.x = room_data["main_pose"]["orientation"]["x"]
+        goal_pose.pose.orientation.y = room_data["main_pose"]["orientation"]["y"]
+        goal_pose.pose.orientation.z = room_data["main_pose"]["orientation"]["z"]
+        goal_pose.pose.orientation.w = room_data["main_pose"]["orientation"]["w"]
+
+        # Retrieve the planned path using the nav2 API.
+        path = navigator.getPath(current_pose_stamped, goal_pose)
+        if path is None:
+            print(f"No valid path found to room {room_name}. Skipping this room.")
+            continue
+
+        path_length = compute_path_length(path)
+        if path_length < best_path_length:
+            best_path_length = path_length
+            best_room = room_name
+
+    return best_room
+
+
+
+def full_tour(navigator):
+    """
+    Computes a full tour covering all non-visited rooms. For each remaining room, it:
+      1. Calculates the best room to visit next using the computed path length.
+      2. Commands the robot to navigate there.
+      3. Waits for the guest to press Enter before continuing.
+    """
+    while len(visited_rooms) < len(ROOMS):
+        next_room = calculate_best_room(navigator)
+        if next_room is None:
+            break
+
+        print(f"Next best room to visit: {next_room}")
+        if navigate_to_room(next_room, navigator):
+            input("Press Enter to continue the tour...")
+        else:
+            navigator.get_logger().error(f"Failed to navigate to {next_room}. Retrying...")
+    print("All rooms have been visited.")
 
 
 def interactive_tour(navigator):
     """
     Runs an interactive loop that asks the user to specify the next room.
-    - If the guest presses Enter without typing anything, the full tour (as defined in full_tour) is started.
+    - If the guest presses Enter without typing anything, the full tour is started.
     - If the guest inputs an invalid room name, available room names are printed and the user is asked again.
-    - If the guest inputs a valid, not-yet-visited room, the robot navigates there.
+    - If the guest inputs a valid room, the robot navigates there.
     """
-    visited_rooms = {"FrontDoor"}  # Assuming starting room was FrontDoor
-
     while len(visited_rooms) < len(ROOMS):
         cmd = input("Enter a specific room to visit (or press Enter for full tour): ").strip()
 
@@ -150,10 +224,10 @@ def interactive_tour(navigator):
     # After specific selections, perform full tour for any remaining rooms.
     remaining = set(ROOMS.keys()) - visited_rooms
     if remaining:
-        navigator.get_logger().info(f"Planning full tour for remaining rooms: {remaining}")
-        full_tour(navigator, visited_rooms)
+        print(f"Planning full tour for remaining rooms: {remaining}")
+        full_tour(navigator)
     else:
-        navigator.get_logger().info("All rooms have been visited.")
+        print("All rooms have been visited.")
 
 
 # Define the room annotations.
@@ -252,7 +326,6 @@ ROOMS = {
 def initialize_navigator():
     navigator = BasicNavigator()
     navigator.waitUntilNav2Active()
-    navigator.get_logger().info("Nav2 is active, proceeding...")
 
     # Set the robot’s initial pose.
     initial_pose = PoseStamped()
@@ -267,19 +340,11 @@ def initialize_navigator():
     initial_pose.pose.orientation.w = 1.0
 
     navigator.setInitialPose(initial_pose)
-    navigator.get_logger().info("Initial pose has been set.")
-
-    # Initialize current_pose as None.
     navigator.current_pose = None
 
     # Subscriber to amcl_pose topic.
-    navigator.create_subscription(
-        PoseWithCovarianceStamped,
-        'amcl_pose',
-        lambda msg: setattr(navigator, 'current_pose', msg.pose.pose),
-        10
-    )
-
+    navigator.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', 
+                                  lambda msg: setattr(navigator, 'current_pose', msg.pose.pose), 10)
     return navigator
 
 if __name__ == "__main__":
