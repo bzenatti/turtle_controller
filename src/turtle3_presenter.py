@@ -202,15 +202,20 @@ def interactive_tour(navigator):
     - If the guest inputs an invalid room name, available room names are printed and the user is asked again.
     - If the guest inputs a valid room, the robot navigates there.
     """
+    
     while len(visited_rooms) < len(ROOMS):
+        print("Non-visited rooms are:")
+        for room in set(ROOMS.keys()) - visited_rooms:
+            print(f"  - {room}")
+            
         cmd = input("Enter a specific room to visit (or press Enter for full tour): ").strip()
 
         if cmd == "":
             break
 
         if cmd not in ROOMS:
-            print("Room name not recognized. Available rooms are:")
-            for room in ROOMS.keys():
+            print("Room name not recognized. Non-visited rooms are:")
+            for room in set(ROOMS.keys()) - visited_rooms:
                 print(f"  - {room}")
             continue
 
